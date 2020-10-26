@@ -1,0 +1,9 @@
+[package]
+name = "cargo-wasm"
+version = "0.1.0"
+authors = ["Paul Dorehill"]
+edition = "2018"
+
+[dependencies]
+cargo_metadata = "0.12"
+structopt = "0.3"

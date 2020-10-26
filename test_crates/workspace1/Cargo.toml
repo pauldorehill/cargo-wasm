@@ -1,0 +1,18 @@
+[package]
+name = "workspace"
+version = "0.1.0"
+authors = ["Paul Dorehill"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "=0.2.68"
+web-sys = { version = "0.3", features = ["console"] }
+
+[workspace]
+members = [
+    "crate1",
+    "crate2",
+]

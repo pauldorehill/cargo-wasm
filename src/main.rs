@@ -84,6 +84,10 @@ struct PackageInfo {
 }
 
 impl PackageInfo {
+    fn get_package_name(&self) -> String {
+        self.package.name.replace("-", "_")
+    }
+
     /// Only return a package if it uses wasm-bindgen
     fn new(metadata: &Metadata, package: Package) -> Option<Self> {
         metadata
@@ -108,7 +112,7 @@ impl PackageInfo {
             "./target/{}/{}/{}.wasm",
             WASM32_UNKNOWN_UNKNOWN,
             if opt.release { "release" } else { "debug" },
-            self.package.name
+            self.get_package_name()
         );
         cmd.arg(wasm_path);
 
@@ -147,7 +151,7 @@ impl PackageInfo {
 
         println!(
             "Building js glue code for {} with wasm-bindgen = {}. Output at: {}",
-            self.package.name,
+            self.get_package_name(),
             self.wasm_bindgen_version,
             out_dir.display()
         );
@@ -186,7 +190,7 @@ impl BindgenPackages {
     fn build_wasm32_unkwown_unknown(&self, opt: &Opt) {
         for p in &self.packages {
             self.cargo
-                .build_wasm32_unkwown_unknown(&p.package.name, opt)
+                .build_wasm32_unkwown_unknown(&p.get_package_name(), opt)
         }
     }
 

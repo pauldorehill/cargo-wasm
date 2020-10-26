@@ -143,12 +143,6 @@ impl PackageInfo {
 
         let mut out_dir = PathBuf::new();
         out_dir.push(opt.out_dir.as_deref().unwrap_or_else(|| OUT_DIR));
-        if opt.clean {
-            println!("Cleaning out-dir: {}", &out_dir.display());
-            if let Err(_) = std::fs::remove_dir_all(&out_dir) {
-                // eprintln!("{}", e)
-            }
-        }
         cmd.args(&["--out-dir", out_dir.to_str().unwrap()]);
 
         println!(
@@ -162,7 +156,6 @@ impl PackageInfo {
         // std::io::stderr().write_all(&output.stderr).unwrap();
 
         let output_wasm = format!("{}/{}_bg.wasm", out_dir.display(), self.get_package_name());
-        println!("{}", output_wasm);
         if opt.wasm_opt {
             match wasm_opt::WasmOpt::new() {
                 Some(wasm_opt) => wasm_opt.run(&output_wasm, opt),
@@ -177,7 +170,6 @@ impl PackageInfo {
 struct BindgenPackages {
     packages: Vec<PackageInfo>,
     cargo: Cargo,
-    is_workspace: bool,
 }
 
 impl BindgenPackages {
@@ -192,11 +184,7 @@ impl BindgenPackages {
                 }
             }
         }
-        Ok(BindgenPackages {
-            packages,
-            cargo,
-            is_workspace: metadata.root_package().is_none(),
-        })
+        Ok(BindgenPackages { packages, cargo })
     }
 
     fn build_wasm32_unkwown_unknown(&self, opt: &Opt) {
@@ -221,6 +209,14 @@ impl BindgenPackages {
     }
 
     fn build_wasm_js(&self, opt: &Opt) {
+        // Must only clean once
+        let mut out_dir = PathBuf::new();
+        out_dir.push(opt.out_dir.as_deref().unwrap_or_else(|| OUT_DIR));
+        if opt.clean {
+            println!("Cleaning out-dir: {}", &out_dir.display());
+            std::fs::remove_dir_all(&out_dir).unwrap_or(());
+        }
+
         for p in &self.packages {
             p.build_wasm_js(opt)
         }

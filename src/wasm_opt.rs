@@ -22,6 +22,7 @@ impl WasmOpt {
                 Self::BINDGEN_VERSION,
                 name
             );
+            println!("Getting wasm-opt from: {}", url);
 
             // TODO: Actually handle errors
             let rep = reqwest::blocking::get(&url).ok()?;
@@ -37,16 +38,22 @@ impl WasmOpt {
     }
 
     // TODO: What should the defaults be? What should release trigger?
+    // TODO: Better size output
     // bin/wasm-opt [.wasm or .wat file] [options] [passes]
     pub(crate) fn run(&self, path_to_wasm: &str, opt: &Opt) {
+        println!("Running wasm-opt");
         let mut cmd = Command::new(Self::FINAL_PATH);
+
+        let wasm_file = std::fs::File::open(path_to_wasm).unwrap();
+        if let Ok(m) = wasm_file.metadata() {
+            println!("Source wasm size: {} bytes", m.len())
+        }
 
         // WASM File
         cmd.arg(path_to_wasm);
 
         // OPTIONS
-        // Output
-        cmd.args(&["-o", path_to_wasm]);
+        cmd.args(&["-o", path_to_wasm]); // Output
         if opt.reference_types {
             cmd.arg("--enable-reference-types");
         }
@@ -55,6 +62,10 @@ impl WasmOpt {
         cmd.arg("-O");
 
         let _ = cmd.output().expect("failed to run wasm-opt");
+
+        if let Ok(m) = wasm_file.metadata() {
+            println!("Final wasm size: {} bytes", m.len())
+        }
         // std::io::stdout().write_all(&output.stdout).unwrap();
         // std::io::stderr().write_all(&output.stderr).unwrap();
     }

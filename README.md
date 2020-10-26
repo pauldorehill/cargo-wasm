@@ -1,7 +1,7 @@
 # cargo-wasm 🍯 🦡
 A simple cargo subcommand that wraps the `wasm-bindgen-cli` and syncs it with the `wasm-bindgen` version. You might not need this 😆 as all the heavy lifting is done by `wasm-bindgen`... but it can make life a little easier.
 
-Its a work in progress so I will break things, make mistakes, and could abandon it... but it works (for me  🦡). I'm always learning - so please feel free to teach me where I've gone wrong & could do better.
+Its a work in progress so I will break things, make mistakes, and could abandon it... but it works (for me). I'm always learning - so please feel free to teach me where I've gone wrong & could do better.
 
 Not on crates.io yet, but you can install from github:
 ```

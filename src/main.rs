@@ -1,4 +1,5 @@
 mod templates;
+mod wasm_opt;
 
 use cargo_metadata::{self, Error, Metadata, Package};
 use std::{collections::BTreeSet, path::PathBuf, process::Command, str::FromStr, sync::Arc};
@@ -108,19 +109,20 @@ impl PackageInfo {
 
     fn build_wasm_js(&self, opt: &Opt) {
         let mut cmd = Command::new(path_to_cli(&self.wasm_bindgen_version));
-        let wasm_path = format!(
+        let source_wasm = format!(
             "./target/{}/{}/{}.wasm",
             WASM32_UNKNOWN_UNKNOWN,
             if opt.release { "release" } else { "debug" },
             self.get_package_name()
         );
-        cmd.arg(wasm_path);
+        cmd.arg(source_wasm);
 
         let target = opt
             .target
             .as_ref()
             .map(|x| x.as_ref())
             .unwrap_or_else(|| "web");
+
         cmd.args(&["--target", target]);
 
         if !opt.typescript {
@@ -158,9 +160,19 @@ impl PackageInfo {
         let _ = cmd.output().expect("unable to build js glue code");
         // std::io::stdout().write_all(&output.stdout).unwrap();
         // std::io::stderr().write_all(&output.stderr).unwrap();
+
+        let output_wasm = format!("{}/{}_bg.wasm", out_dir.display(), self.get_package_name());
+        println!("{}", output_wasm);
+        if opt.wasm_opt {
+            match wasm_opt::WasmOpt::new() {
+                Some(wasm_opt) => wasm_opt.run(&output_wasm, opt),
+                None => eprint!("Could not install wasm-opt"),
+            }
+        }
     }
 }
 
+//TODO: What if workspace is a crate in of itself?
 #[derive(Clone)]
 struct BindgenPackages {
     packages: Vec<PackageInfo>,
@@ -254,7 +266,7 @@ impl AsRef<str> for WasmTarget {
 // TODO: Look at debug options: should '--debug' be the default when not release?
 // TODO: Add in all cli options
 
-#[derive(StructOpt)]
+#[derive(StructOpt, Default)]
 struct Opt {
     /// Compile in release mode
     #[structopt(long, short)]
@@ -294,11 +306,15 @@ struct Opt {
     /// When post-processing the .wasm binary, do not demangle Rust symbols in the "names" custom section.
     #[structopt(long)]
     no_demangle: bool,
+
+    /// Runs wasm-opt https://github.com/WebAssembly/binaryen#wasm-opt
+    #[structopt(long)]
+    wasm_opt: bool,
 }
 
 // TODO: Static version of rollup.js for packaging?
 // TODO: Sort logging / verbose
-// TODO: wasm-opt
+// TODO: Normalise how paths to files / folders are done...
 #[derive(StructOpt)]
 enum CargoWasm {
     /// Compile your project to wasm and generate js glue code

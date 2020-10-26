@@ -7,3 +7,6 @@ edition = "2018"
 [dependencies]
 cargo_metadata = "0.12"
 structopt = "0.3"
+reqwest = { version = "0.10", features = ["blocking", "json"] }
+tar = "0.4"
+flate2 = "1.0"

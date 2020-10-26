@@ -16,7 +16,6 @@ There are currently two commands (add an `-h` arg for more info):
 Works for both single crates & workspaces. When using with workspaces you will get a single directory at the workspace root containing all the wasm and js glue code. Note it currently installs the `wasm-bindgen-cli` using cargo & locally to the crate... so first run can take a bit longer.
 
 ## TODO
-- Add `wasm-opt`
 - Add `run` & `test` commands
 - Bundler stuff
 - node / deno?

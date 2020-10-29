@@ -1,6 +1,11 @@
-use crate::PackageInfo;
+use crate::{PackageInfo, WasmTarget};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+
+pub(crate) const ROLLUP_TEMPLATE: &str = include_str!("../templates/rollup/rollup.config.js");
+pub(crate) const ROLLUP_PACKAGE_JSON: &str = include_str!("../templates/rollup/package.json");
+pub(crate) const NODE_GITIGNORE: &str = include_str!("../templates/rollup/.gitignore");
+pub(crate) const GITIGNORE: &str = include_str!("../templates/web/.gitignore");
 
 pub(crate) const LIB_RS: &str = r#"use wasm_bindgen::prelude::*;
 
@@ -16,17 +21,18 @@ crate-type = ["cdylib", "rlib"]
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["console"] }"#;
 
-pub(crate) fn make_html(project_name: &str, bundler: bool) -> String {
-    let script = if bundler {
-        format!(r#"<script src="./js/{}.js"></script>"#, project_name)
-    } else {
-        format!(
+pub(crate) fn make_html(project_name: &str, target: &WasmTarget) -> String {
+    let script = match target {
+        WasmTarget::Web => format!(
             r#"<script type="module">
-    import init from './js/{}.js';
-    init();
-</script>"#,
+        import init from './js/{}.js';
+        init();
+    </script>"#,
             project_name
-        )
+        ),
+        WasmTarget::Rollup | WasmTarget::Webpack => {
+            format!(r#"<script src="js/index.js"></script>"#)
+        }
     };
 
     format!(
@@ -45,10 +51,6 @@ pub(crate) fn make_html(project_name: &str, bundler: bool) -> String {
         script
     )
 }
-
-pub(crate) const GITIGNORE: &str = r#"/target
-Cargo.lock
-/dist/js"#;
 
 pub(crate) fn rollup_bootstrap_js(names: &[PackageInfo], out_dir: &Path) -> String {
     let mut output = String::new();

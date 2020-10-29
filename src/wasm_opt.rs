@@ -1,5 +1,6 @@
 use crate::Opt;
 use flate2::read::GzDecoder;
+use log::info;
 use std::{fmt::Display, path::Path, process::Command};
 use structopt::StructOpt;
 use tar::Archive;
@@ -87,9 +88,8 @@ impl WasmOpt {
                 "https://github.com/WebAssembly/binaryen/releases/download/{}/{}.gz",
                 BINDGEN_VERSION, name
             );
-            println!("Getting wasm-opt from: {}", url);
+            info!("Getting wasm-opt from: {}", url);
 
-            // TODO: Actually handle errors
             let rep = reqwest::blocking::get(&url).map_err(|e| e.to_string())?;
             let data = rep.bytes().map_err(|e| e.to_string())?;
             let decompressed = GzDecoder::new(&*data);
@@ -103,14 +103,14 @@ impl WasmOpt {
     }
 
     // TODO: What should the defaults be? What should release trigger?
-    // TODO: Better size output
+    // TODO: Better size output logging
     // bin/wasm-opt [.wasm or .wat file] [options] [passes]
     pub fn try_run(&self, wasm: &Path, opt: &Opt) -> Result<(), String> {
-        println!("Running wasm-opt for {}", wasm.display());
+        info!("Running wasm-opt for {}", wasm.display());
         let mut cmd = Command::new(FINAL_PATH);
         let wasm_file = std::fs::File::open(wasm).map_err(|e| e.to_string())?;
         let original_file_size = wasm_file.metadata().map_err(|e| e.to_string())?.len();
-        println!("Source wasm size: {} bytes", original_file_size);
+        info!("Source wasm size: {} bytes", original_file_size);
 
         // [WASM File]
         cmd.arg(wasm);
@@ -157,19 +157,17 @@ impl WasmOpt {
             cmd.arg("-O");
         }
 
-        let _ = cmd.output().expect("failed to run wasm-opt");
+        cmd.status().expect("failed to run wasm-opt");
 
         let final_file_size = wasm_file.metadata().map_err(|e| e.to_string())?.len();
-        println!("Final wasm size: {} bytes", final_file_size);
+        info!("Final wasm size: {} bytes", final_file_size);
 
-        println!(
+        info!(
             "Size reduction: {:.1} %",
             final_file_size as f64 / original_file_size as f64 * 100f64
         );
 
         Ok(())
-        // std::io::stdout().write_all(&output.stdout).unwrap();
-        // std::io::stderr().write_all(&output.stderr).unwrap();
     }
 
     pub(crate) fn try_install_and_run(&self, path_to_wasm: &Path, opt: &Opt) -> Result<(), String> {

@@ -1,8 +1,15 @@
 mod templates;
 mod wasm_opt;
 use cargo_metadata::{self, Error, Metadata, Package};
+use env_logger::Env;
+use log::{error, info};
 use std::{
-    collections::BTreeSet, io::Write, path::PathBuf, process::Command, str::FromStr, sync::Arc,
+    collections::BTreeSet,
+    path::PathBuf,
+    process::Command,
+    process::{ExitStatus, Stdio},
+    str::FromStr,
+    sync::Arc,
 };
 use structopt::StructOpt;
 use wasm_opt::WasmOpt;
@@ -21,25 +28,29 @@ fn path_to_cli(wasm_bindgen_version: &str) -> PathBuf {
     path
 }
 
+fn run_command(mut cmd: Command, quiet: bool) -> std::io::Result<ExitStatus> {
+    if quiet {
+        cmd.stderr(Stdio::null()).status()
+    } else {
+        cmd.status()
+    }
+}
+
 #[derive(Clone)]
 struct Cargo(String);
 
 impl Cargo {
-    // TODO: Only run if not there... `exists()` still works, if just the file is deleted?
-    // if !Path::new(&path_to_cli(wasm_bindgen_version)).exists() {
-    // }
-    // TODO: Write test to make sure that correct version is installed: check .crates.toml file
-    fn install_wasm_bindgen_cli(&self, wasm_bindgen_version: &str) {
+    fn install_wasm_bindgen_cli(&self, wasm_bindgen_version: &str, quiet: bool) {
         let mut path = path_to_cli(wasm_bindgen_version);
         if path.exists() {
-            println!(
+            info!(
                 "{} {} already installed",
                 WASM_BINDGEN_CLI, wasm_bindgen_version
             );
         } else {
             path.pop();
             path.pop();
-            println!("Installing {}: {}", WASM_BINDGEN_CLI, wasm_bindgen_version);
+            info!("Installing {}: {}", WASM_BINDGEN_CLI, wasm_bindgen_version);
             let mut cmd = Command::new(&self.0);
             cmd.args(&[
                 "install",
@@ -50,13 +61,12 @@ impl Cargo {
                 "--",
                 WASM_BINDGEN_CLI,
             ]);
-            // TODO: Show this so can see something is happening?
-            cmd.output().expect("Unable to install wasm_bindgen_cli");
+            run_command(cmd, quiet).expect("Unable to install wasm_bindgen_cli");
         }
     }
 
     fn build_wasm32_unknown_unknown(&self, package_name: &str, opt: &Opt) {
-        println!("Building {} for {}", WASM32_UNKNOWN_UNKNOWN, package_name);
+        info!("Building {} for {}", WASM32_UNKNOWN_UNKNOWN, package_name);
         let mut cmd = Command::new(&self.0);
         cmd.args(&[
             "build",
@@ -68,41 +78,56 @@ impl Cargo {
         if opt.release {
             cmd.arg("--release");
         }
-        cmd.output()
-            .expect("unable run cargo to build wasm32 target");
+        run_command(cmd, opt.quiet).expect("unable run cargo to build wasm32 target");
     }
 
     // TODO: is cargo new the best way here? Using for now since it gets the local author.
-    fn new_template_project(&self, name: &str, bundler: bool) {
-        let mut cmd = Command::new(&self.0);
-        cmd.args(&["new", "--lib", name]);
-        cmd.output().expect("unable run cargo new");
-
+    fn new_template_project(&self, name: &str, target: &WasmTarget, quiet: bool) {
         let mut path = PathBuf::from(name);
-
         let cargo_toml = path.join("Cargo.toml");
-        // Just ran cargo new so will always exist
-        let ct = std::fs::read_to_string(&cargo_toml).unwrap();
-        // TODO: What if you run new more than once... quick fix ;-)
-        if !ct.contains(r#"crate-type = ["cdylib", "rlib"]"#) {
+        if cargo_toml.exists() {
+            error!(
+                "destination `{}` already exists",
+                path.canonicalize().unwrap().display()
+            )
+        } else {
+            let mut cmd = Command::new(&self.0);
+            cmd.args(&["new", "--lib", name]);
+            run_command(cmd, quiet).expect("unable run cargo new");
+
+            let ct = std::fs::read_to_string(&cargo_toml).unwrap();
             std::fs::write(
                 cargo_toml,
                 ct.replace("[dependencies]", templates::DEPENDENCIES),
             )
             .unwrap();
+
+            let lib = path.join("src/lib.rs");
+            std::fs::write(lib, templates::LIB_RS).unwrap();
+
+            let gitignore = path.join(".gitignore");
+            match target {
+                WasmTarget::Web => {
+                    std::fs::write(gitignore, templates::GITIGNORE).unwrap();
+                }
+                WasmTarget::Rollup => {
+                    std::fs::write(gitignore, templates::NODE_GITIGNORE).unwrap();
+                    std::fs::write(path.join("rollup.config.js"), templates::ROLLUP_TEMPLATE)
+                        .unwrap();
+                    std::fs::write(path.join("package.json"), templates::ROLLUP_PACKAGE_JSON)
+                        .unwrap();
+                }
+                WasmTarget::Webpack => {
+                    std::fs::write(gitignore, templates::NODE_GITIGNORE).unwrap();
+                }
+            }
+
+            path.push("dist");
+            std::fs::create_dir_all(&path).unwrap();
+
+            path.push("index.html");
+            std::fs::write(path, templates::make_html(name, target)).unwrap();
         }
-
-        let lib = path.join("src/lib.rs");
-        std::fs::write(lib, templates::LIB_RS).unwrap();
-
-        let gitignore = path.join(".gitignore");
-        std::fs::write(gitignore, templates::GITIGNORE).unwrap();
-
-        path.push("dist");
-        std::fs::create_dir_all(&path).unwrap();
-
-        path.push("index.html");
-        std::fs::write(path, templates::make_html(name, bundler)).unwrap();
     }
 }
 
@@ -145,12 +170,7 @@ impl PackageInfo {
         );
         cmd.arg(source_wasm);
 
-        let target = opt
-            .target
-            .as_ref()
-            .map(|x| x.as_ref())
-            .unwrap_or_else(|| "web");
-
+        let target = opt.target.as_ref().unwrap_or_default().as_ref();
         cmd.args(&["--target", target]);
 
         if !opt.typescript {
@@ -173,14 +193,12 @@ impl PackageInfo {
         out_wasm.push(opt.out_dir.as_deref().unwrap_or_else(|| OUT_DIR));
         cmd.args(&["--out-dir", &out_wasm.display().to_string()]);
 
-        println!("Building js glue code for {}", self.get_package_name(),);
+        info!("Building js glue code for {}", self.get_package_name(),);
 
-        let output = cmd.output().expect("unable to build js glue code");
-        std::io::stdout().write_all(&output.stdout).unwrap();
-        std::io::stderr().write_all(&output.stderr).unwrap();
+        run_command(cmd, opt.quiet).expect("unable to build js glue code");
 
-        out_wasm.push(format!("{}_bg.wasm", self.get_package_name()));
         if let Some(SubCmds::WASM_OPT(wasm_opt)) = &opt.subs {
+            out_wasm.push(format!("{}_bg.wasm", self.get_package_name()));
             if let Err(e) = wasm_opt.try_install_and_run(&out_wasm, opt) {
                 eprint!("Error running wasm-opt: {}", e)
             }
@@ -219,14 +237,14 @@ impl BindgenPackages {
     // TODO: Move this to the global cargo store?
     // TODO: Cargo will fail if they are different...what should approach be?
     // Could download instead...?
-    fn install_wasm_bindgen_cli(&self) {
+    fn install_wasm_bindgen_cli(&self, quiet: bool) {
         let bindgen: BTreeSet<&str> = self
             .packages
             .iter()
             .map(|p| p.wasm_bindgen_version.as_str())
             .collect();
         for bg in bindgen {
-            self.cargo.install_wasm_bindgen_cli(bg)
+            self.cargo.install_wasm_bindgen_cli(bg, quiet)
         }
     }
 
@@ -235,7 +253,7 @@ impl BindgenPackages {
         let mut out_dir = PathBuf::new();
         out_dir.push(opt.out_dir.as_deref().unwrap_or_else(|| OUT_DIR));
         if opt.clean {
-            println!("Cleaning out-dir: {}", &out_dir.display());
+            info!("Cleaning out-dir: {}", &out_dir.display());
             std::fs::remove_dir_all(&out_dir).unwrap_or(());
         }
         for p in &self.packages {
@@ -256,10 +274,14 @@ enum WasmTarget {
     Web,
     Rollup,
     // NoModules,
-    /// For use with
     Webpack,
     // Nodejs,
     // Deno,
+}
+impl Default for &WasmTarget {
+    fn default() -> Self {
+        &WasmTarget::Web
+    }
 }
 
 impl FromStr for WasmTarget {
@@ -295,7 +317,6 @@ impl AsRef<str> for WasmTarget {
 
 // TODO: Look at debug options: should '--debug' be the default when not release?
 // TODO: Add in all cli options
-
 #[derive(StructOpt, Default)]
 struct Opt {
     /// Compile in release mode
@@ -337,12 +358,15 @@ struct Opt {
     #[structopt(long)]
     no_demangle: bool,
 
+    ///  No output printed to stdout
+    #[structopt(long, short)]
+    quiet: bool,
+
     #[structopt(subcommand)]
     subs: Option<SubCmds>,
 }
 
 // TODO: Is giant struct a good idea... or should just use a vec? Use a macro to parse the wasm-opt.txt file...
-
 #[derive(StructOpt, Debug)]
 #[allow(non_camel_case_types)]
 enum SubCmds {
@@ -359,42 +383,61 @@ impl Default for SubCmds {
 }
 
 // TODO: Static version of rollup.js for packaging?
-// TODO: Sort logging / verbose
-// TODO: Normalise how paths to files / folders are done...
 #[derive(StructOpt)]
 enum CargoWasm {
     /// Compile your project to wasm and generate js glue code
     Build(Opt),
-
-    // TODO: Bundler option
     /// Create a template project for loading in the browser
-    New { name: String },
+    New {
+        /// Project name
+        name: String,
+        /// Planned target: web (default), rollup, webpack
+        #[structopt(long)]
+        target: Option<WasmTarget>,
+        ///  No output printed to stdout
+        #[structopt(long, short)]
+        quiet: bool,
+    },
     // TODO
     // Run,
     // Test
 }
 
 impl CargoWasm {
+    fn quiet(&self) -> bool {
+        match self {
+            CargoWasm::Build(opt) => opt.quiet,
+            CargoWasm::New {
+                name: _,
+                target: _,
+                quiet,
+            } => *quiet,
+        }
+    }
+
     fn run(&self, cargo: Cargo) {
         match self {
             CargoWasm::Build(opt) => match BindgenPackages::new(cargo) {
-                Ok(bp) => self.build(bp, opt),
+                Ok(bp) => self.build(bp, &opt),
                 Err(e) => {
-                    eprintln!("Unable to begin running cargo-wasm:");
-                    eprintln!("{}", e);
+                    error!("{}", e);
                 }
             },
-            //TODO: Bundler option
-            CargoWasm::New { name } => cargo.new_template_project(name, false),
+            CargoWasm::New {
+                name,
+                target,
+                quiet,
+            } => cargo.new_template_project(name, target.as_ref().unwrap_or_default(), *quiet),
         }
     }
 
     fn build(&self, bindgen_packages: BindgenPackages, opt: &Opt) {
         let bindgen_packages = Arc::new(bindgen_packages);
         let bp = Arc::clone(&bindgen_packages);
+        let quiet = opt.quiet;
         // TODO: Is this worth it?
         let handler = std::thread::spawn(move || {
-            bp.install_wasm_bindgen_cli();
+            bp.install_wasm_bindgen_cli(quiet);
         });
         bindgen_packages.build_wasm32_unknown_unknown(opt);
         handler.join().unwrap();
@@ -407,9 +450,18 @@ fn main() {
     // Need to skip one arg: .. /.cargo/bin/cargo-wasm for structopt to work?
     args.next();
     let cargo_wasm = CargoWasm::from_iter(args);
+
+    let log_level = if cargo_wasm.quiet() { "error" } else { "info" };
+    let env = Env::default().filter_or("MY_LOG_LEVEL", log_level);
+    env_logger::Builder::from_env(env)
+        .format_level(true)
+        .format_timestamp(None)
+        .format_module_path(false)
+        .init();
+
     match std::env::var("CARGO") {
         Ok(cargo) => cargo_wasm.run(Cargo(cargo)),
-        Err(e) => eprintln!("{}", e),
+        Err(e) => error!("{}", e),
     }
 }
 
@@ -419,6 +471,7 @@ mod tests {
     #[test]
     fn installs_correct_bindgen_version() {
         let crates = ".crates.toml";
+        let in_file = |v: &str| format!("wasm-bindgen-cli {}", v);
 
         let v_1 = "0.2.68";
         let cargo_1 = Cargo(std::env::var("CARGO").unwrap());
@@ -433,14 +486,14 @@ mod tests {
         path_2.push(crates);
 
         let handler = std::thread::spawn(move || {
-            cargo_1.install_wasm_bindgen_cli("0.2.68");
+            cargo_1.install_wasm_bindgen_cli("0.2.68", false);
             let file_1 = std::fs::read_to_string(path_1).unwrap();
-            assert!(file_1.contains(v_1))
+            assert!(file_1.contains(&in_file(v_1)))
         });
 
-        cargo_2.install_wasm_bindgen_cli("0.2.67");
+        cargo_2.install_wasm_bindgen_cli("0.2.67", false);
         let file_2 = std::fs::read_to_string(path_2).unwrap();
-        assert!(file_2.contains(v_2));
+        assert!(file_2.contains(&in_file(v_2)));
         handler.join().unwrap();
     }
 }

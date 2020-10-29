@@ -17,10 +17,10 @@ Works for both single crates & workspaces. When using with workspaces you will g
 
 ## TODO
 - Add `run` & `test` commands
-- Bundler stuff
 - node / deno?
-- Write some tests
-- Sort out logging / stdout from `Command`
+- Webpack template
+- Auto run rollup on build if detected?
+- Write more tests
 
 ## Notes
 

@@ -1,3 +1,7 @@
+use crate::PackageInfo;
+use std::fmt::Write;
+use std::path::{Path, PathBuf};
+
 pub(crate) const LIB_RS: &str = r#"use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
@@ -45,3 +49,31 @@ pub(crate) fn make_html(project_name: &str, bundler: bool) -> String {
 pub(crate) const GITIGNORE: &str = r#"/target
 Cargo.lock
 /dist/js"#;
+
+pub(crate) fn rollup_bootstrap_js(names: &[PackageInfo], out_dir: &Path) -> String {
+    let mut output = String::new();
+    for n in names {
+        writeln!(
+            output,
+            r#"import * as {0} from "./{0}.js""#,
+            n.get_package_name()
+        )
+        .unwrap()
+    }
+    for n in names {
+        let mut path = PathBuf::new();
+        if let Some(p) = out_dir.file_name() {
+            path.push(p)
+        }
+        let name = n.get_package_name();
+        path.push(&format!("{}_bg.wasm", name));
+        writeln!(
+            output,
+            r#"{}.default("{}").catch((e) => {{ console.log("Failed to load wasm file: {1}") }})"#,
+            name,
+            path.display()
+        )
+        .unwrap()
+    }
+    output
+}

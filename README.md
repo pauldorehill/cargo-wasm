@@ -1,5 +1,5 @@
-# cargo-wasm 🍯 🦡
-A simple cargo subcommand that wraps the `wasm-bindgen-cli` and syncs it with the `wasm-bindgen` version. You might not need this 😆 as all the heavy lifting is done by `wasm-bindgen`... but it can make life a little easier.
+# cargo-wasm
+A simple cargo subcommand that wraps the `wasm-bindgen-cli` and syncs it with the `wasm-bindgen` version. You might not need this as all the heavy lifting is done by `wasm-bindgen`, but it can make life a little easier.
 
 Its a work in progress so I will break things, make mistakes, and could abandon it... but it works (for me). I'm always learning - so please feel free to teach me where I've gone wrong & could do better.
 
@@ -41,6 +41,8 @@ To use:
 cargo build --lib --target wasm32-unknown-unknown
 wasm-bindgen ./target/wasm32-unknown-unknown/debug/package_name.wasm --out-dir ./dist/js
 ```
+[running tests](https://rustwasm.github.io/docs/wasm-bindgen/wasm-bindgen-test/usage.html?highlight=test#appendix-using-wasm-bindgen-test-without-wasm-pack)
+[headless](https://rustwasm.github.io/docs/wasm-bindgen/wasm-bindgen-test/browsers.html#appendix-testing-in-headless-browsers-without-wasm-pack)
 
 ### wasm-bindgen
 https://github.com/rustwasm/wasm-bindgen/releases
@@ -48,10 +50,15 @@ https://github.com/rustwasm/wasm-bindgen/releases
 ### wasm-opt
 Releases are here:
 https://github.com/WebAssembly/binaryen/releases
-These are quite large: best to download on order?
+
+These are quite large: best to download on order? Only x84_64?
+```
+wasm-opt [.wasm or .wat file] [options] [passes]
+```
 
 ### Rollup
 
 [Rollup](https://rollupjs.org/guide/en/)
+
 [Rollup plugin](https://github.com/wasm-tool/rollup-plugin-rust/blob/master/index.js)
 

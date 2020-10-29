@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+</head>
+
+<body>
+    <div>Hello from rust + wasm. Check the browser console.</div>
+</body>
+<!-- Need type="module" here to allow imports -->
+<script type="module">
+    import init from './js/crate.js';
+    init();
+</script>
+
+</html>

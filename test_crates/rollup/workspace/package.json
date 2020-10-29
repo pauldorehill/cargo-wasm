@@ -1,0 +1,12 @@
+{
+  "scripts": {
+    "build": "rollup --config",
+    "start": "rollup --config --watch"
+  },
+  "devDependencies": {
+    "rollup": "^2.23.0",
+    "rollup-plugin-livereload": "^2.0.0",
+    "rollup-plugin-serve": "^1.0.3",
+    "rollup-plugin-terser": "^7.0.0"
+  }
+}

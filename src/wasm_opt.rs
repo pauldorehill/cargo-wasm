@@ -1,15 +1,14 @@
 use crate::Opt;
 use flate2::read::GzDecoder;
-use log::info;
-use std::{fmt::Display, path::Path, process::Command};
+use log::{error, info, trace};
+use std::{error::Error, fmt::Display, path::Path, process::Command};
 use structopt::StructOpt;
 use tar::Archive;
-
 // Fixed version for consistent builds
 // 97 has linux, windows & macos: only x84_64
 const BINDGEN_VERSION: &'static str = "version_97";
-const OUT_DIR: &'static str = "./target/wasm-opt";
-const FINAL_PATH: &'static str = "./target/wasm-opt/binaryen-version_97/bin/wasm-opt";
+const OUT_DIR: &'static str = "target/binaryen";
+const FINAL_PATH: &'static str = "target/binaryen/binaryen-version_97/bin/wasm-opt";
 const ARCH_X86_64: &'static str = "x86_64";
 
 // TODO: Is restricting this to x84_64 correct?
@@ -75,9 +74,8 @@ pub(crate) struct WasmOpt {
     Oz: bool,
 }
 
-// TODO: Do something better with errors
 impl WasmOpt {
-    fn try_install() -> Result<(), String> {
+    pub(crate) fn try_install(&self) -> Result<(), Box<dyn Error>> {
         if !Path::new(FINAL_PATH).exists() {
             let platform = Platform::try_new()?;
             let name = format!(
@@ -85,32 +83,51 @@ impl WasmOpt {
                 BINDGEN_VERSION, ARCH_X86_64, platform
             );
             let url = format!(
-                "https://github.com/WebAssembly/binaryen/releases/download/{}/{}.gz",
+                "http://github.com/WebAssembly/binaryen/releases/download/{}/{}.gz",
                 BINDGEN_VERSION, name
             );
-            info!("Getting wasm-opt from: {}", url);
 
-            let rep = reqwest::blocking::get(&url).map_err(|e| e.to_string())?;
-            let data = rep.bytes().map_err(|e| e.to_string())?;
+            info!("Trying to download wasm-opt from: {}", url);
+            let client = reqwest::blocking::Client::new();
+            // TODO: How many retries?
+            let data = match client.get(&url).send().and_then(|r| r.bytes()) {
+                Ok(data) => data,
+                Err(e) => {
+                    error!("First request failed with: '{}'. Retrying...", e);
+                    client.get(&url).send()?.bytes()?
+                }
+            };
+
             let decompressed = GzDecoder::new(&*data);
             let mut archive = Archive::new(decompressed);
             // TODO: Just get wasm-opt?
-            archive.unpack(OUT_DIR).map_err(|e| e.to_string())?;
+            archive.unpack(OUT_DIR)?;
+            info!("wasm-opt installed at: {}", FINAL_PATH);
             Ok(())
         } else {
+            info!("wasm-opt already installed");
             Ok(())
         }
     }
 
+    fn file_size(raw_size: u64) -> String {
+        let kb = 1024;
+        let mb = 1_048_576;
+        if raw_size == 1 {
+            String::from("1 byte")
+        } else if raw_size < kb {
+            format!("{} bytes", raw_size)
+        } else if raw_size < mb {
+            format!("{:.2} KiB", raw_size as f64 / kb as f64)
+        } else {
+            format!("{:.2} MB", raw_size as f64 / mb as f64)
+        }
+    }
     // TODO: What should the defaults be? What should release trigger?
-    // TODO: Better size output logging
     // bin/wasm-opt [.wasm or .wat file] [options] [passes]
-    pub fn try_run(&self, wasm: &Path, opt: &Opt) -> Result<(), String> {
-        info!("Running wasm-opt for {}", wasm.display());
+    pub(crate) fn try_run(&self, wasm: &Path, opt: &Opt) -> Result<(), Box<dyn Error>> {
         let mut cmd = Command::new(FINAL_PATH);
-        let wasm_file = std::fs::File::open(wasm).map_err(|e| e.to_string())?;
-        let original_file_size = wasm_file.metadata().map_err(|e| e.to_string())?.len();
-        info!("Source wasm size: {} bytes", original_file_size);
+        let wasm_file = std::fs::File::open(wasm)?;
 
         // [WASM File]
         cmd.arg(wasm);
@@ -152,27 +169,38 @@ impl WasmOpt {
             cmd.arg("-Oz");
             set = true;
         }
-        // Set this as the default
         if self.O || !set {
+            trace!("wasm-opt using default optimization passes");
             cmd.arg("-O");
         }
 
-        cmd.status().expect("failed to run wasm-opt");
+        let original_file_size = wasm_file.metadata()?.len();
+        let run = crate::run_command(cmd, opt.quiet);
 
-        let final_file_size = wasm_file.metadata().map_err(|e| e.to_string())?.len();
-        info!("Final wasm size: {} bytes", final_file_size);
+        match run {
+            Ok(_) => {
+                let final_file_size = wasm_file.metadata()?.len();
+                info!(
+                    "Ran wasm-opt for {}
+Orignal size: {}
+  Final size: {}
+   Reduction: {:.1} % [{}]",
+                    wasm.display(),
+                    Self::file_size(original_file_size),
+                    Self::file_size(final_file_size),
+                    ((original_file_size - final_file_size) as f64 / original_file_size as f64)
+                        * 100f64,
+                    Self::file_size(original_file_size - final_file_size),
+                );
+            }
+            Err(e) => error!(
+                "Failed to run wasm-opt for {}
+{}",
+                wasm.display(),
+                e
+            ),
+        }
 
-        info!(
-            "Size reduction: {:.1} %",
-            final_file_size as f64 / original_file_size as f64 * 100f64
-        );
-
-        Ok(())
-    }
-
-    pub(crate) fn try_install_and_run(&self, path_to_wasm: &Path, opt: &Opt) -> Result<(), String> {
-        Self::try_install()?;
-        self.try_run(path_to_wasm, opt)?;
         Ok(())
     }
 }
@@ -182,7 +210,7 @@ mod tests {
     use super::*;
     #[test]
     fn download_and_run() {
-        std::fs::remove_dir_all("target/wasm-opt").unwrap_or(());
+        std::fs::remove_dir_all(OUT_DIR).unwrap_or(());
         let opts = Opt::default();
         let wasm_opt = WasmOpt::default();
         let test_wasm = Path::new("test_crates/test.wasm");
@@ -190,9 +218,22 @@ mod tests {
         std::fs::copy(template, test_wasm).unwrap();
         let template = std::fs::File::open(template).unwrap();
         let test_wasm_file = std::fs::File::open(test_wasm).unwrap();
-        wasm_opt.try_install_and_run(test_wasm, &opts).unwrap();
+        wasm_opt.try_install().unwrap();
+        wasm_opt.try_run(test_wasm, &opts).unwrap();
         // Check smaller
         assert!(test_wasm_file.metadata().unwrap().len() < template.metadata().unwrap().len());
         std::fs::remove_file(test_wasm).unwrap();
+    }
+
+    #[test]
+    fn check_file_size() {
+        assert_eq!(WasmOpt::file_size(0), "0 bytes");
+        assert_eq!(WasmOpt::file_size(1), "1 byte");
+        assert_eq!(WasmOpt::file_size(1023), "1023 bytes");
+        assert_eq!(WasmOpt::file_size(1024), "1.00 KiB");
+        assert_eq!(WasmOpt::file_size(1536), "1.50 KiB");
+        assert_eq!(WasmOpt::file_size(2048), "2.00 KiB");
+        assert_eq!(WasmOpt::file_size(1_048_576), "1.00 MB");
+        assert_eq!(WasmOpt::file_size(1_572_864), "1.50 MB");
     }
 }

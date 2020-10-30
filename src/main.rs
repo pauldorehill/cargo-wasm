@@ -1,8 +1,7 @@
 mod templates;
 mod wasm_opt;
 use cargo_metadata::{self, Error, Metadata, Package};
-use env_logger::Env;
-use log::{error, info};
+use log::{error, info, LevelFilter};
 use std::{
     collections::BTreeSet,
     path::PathBuf,
@@ -61,7 +60,10 @@ impl Cargo {
                 "--",
                 WASM_BINDGEN_CLI,
             ]);
-            run_command(cmd, quiet).expect("Unable to install wasm_bindgen_cli");
+            match run_command(cmd, quiet) {
+                Ok(_) => info!("{} installed at: {}", WASM_BINDGEN_CLI, path.display()),
+                Err(e) => error!("Unable to install {}\n{}", WASM_BINDGEN_CLI, e),
+            };
         }
     }
 
@@ -78,7 +80,13 @@ impl Cargo {
         if opt.release {
             cmd.arg("--release");
         }
-        run_command(cmd, opt.quiet).expect("unable run cargo to build wasm32 target");
+        match run_command(cmd, opt.quiet) {
+            Ok(_) => info!("Built {} for {}", WASM32_UNKNOWN_UNKNOWN, package_name),
+            Err(e) => error!(
+                "Unable run cargo to build {} for {}\n{}",
+                WASM32_UNKNOWN_UNKNOWN, package_name, e
+            ),
+        }
     }
 
     // TODO: is cargo new the best way here? Using for now since it gets the local author.
@@ -93,7 +101,11 @@ impl Cargo {
         } else {
             let mut cmd = Command::new(&self.0);
             cmd.args(&["new", "--lib", name]);
-            run_command(cmd, quiet).expect("unable run cargo new");
+
+            match run_command(cmd, quiet) {
+                Ok(_) => {}
+                Err(e) => error!("Failed to run cargo new:\n{}", e),
+            }
 
             let ct = std::fs::read_to_string(&cargo_toml).unwrap();
             std::fs::write(
@@ -160,7 +172,7 @@ impl PackageInfo {
             })
     }
 
-    fn build_wasm_js(&self, opt: &Opt) {
+    fn build_wasm_js(&self, opt: &Opt) -> Result<PathBuf, ()> {
         let mut cmd = Command::new(path_to_cli(&self.wasm_bindgen_version));
         let source_wasm = format!(
             "./target/{}/{}/{}.wasm",
@@ -195,12 +207,14 @@ impl PackageInfo {
 
         info!("Building js glue code for {}", self.get_package_name(),);
 
-        run_command(cmd, opt.quiet).expect("unable to build js glue code");
-
-        if let Some(SubCmds::WASM_OPT(wasm_opt)) = &opt.subs {
-            out_wasm.push(format!("{}_bg.wasm", self.get_package_name()));
-            if let Err(e) = wasm_opt.try_install_and_run(&out_wasm, opt) {
-                eprint!("Error running wasm-opt: {}", e)
+        match run_command(cmd, opt.quiet) {
+            Ok(_) => {
+                info!("js glue built for {}", self.get_package_name());
+                Ok(out_wasm)
+            }
+            Err(e) => {
+                error!("unable to build js glue code:\n{}", e);
+                Err(())
             }
         }
     }
@@ -256,14 +270,38 @@ impl BindgenPackages {
             info!("Cleaning out-dir: {}", &out_dir.display());
             std::fs::remove_dir_all(&out_dir).unwrap_or(());
         }
-        for p in &self.packages {
-            p.build_wasm_js(opt)
-        }
-        // TODO: Here should look for a rollup.config.js file & run it?
-        if let Some(WasmTarget::Rollup) = opt.target {
-            let bootstrap = templates::rollup_bootstrap_js(self.packages.as_slice(), &out_dir);
-            out_dir.push("bootstrap.js");
-            std::fs::write(out_dir, bootstrap).unwrap()
+
+        let wasm_files: Result<Vec<PathBuf>, ()> = self
+            .packages
+            .iter()
+            .map(|pi| {
+                pi.build_wasm_js(opt).map(|mut p| {
+                    p.push(format!("{}_bg.wasm", pi.get_package_name()));
+                    p
+                })
+            })
+            .collect();
+
+        if let Ok(wasm_files) = wasm_files {
+            if let Some(SubCmds::WASM_OPT(wasm_opt)) = &opt.subs {
+                match wasm_opt.try_install() {
+                    Ok(_) => {
+                        for out_wasm in wasm_files {
+                            if let Err(e) = wasm_opt.try_run(&out_wasm, opt) {
+                                error!("Error running wasm-opt: {}", e)
+                            }
+                        }
+                    }
+                    Err(e) => error!("Unable to install wasm-opt:\n{}", e),
+                }
+            }
+
+            // TODO: Here should look for a rollup.config.js file & run it?
+            if let Some(WasmTarget::Rollup) = opt.target {
+                let bootstrap = templates::rollup_bootstrap_js(self.packages.as_slice(), &out_dir);
+                out_dir.push("bootstrap.js");
+                std::fs::write(out_dir, bootstrap).unwrap()
+            }
         }
     }
 }
@@ -445,18 +483,23 @@ impl CargoWasm {
     }
 }
 
+// TODO: Add verbose options etc: use more trace logging?
 fn main() {
     let mut args = std::env::args().into_iter();
     // Need to skip one arg: .. /.cargo/bin/cargo-wasm for structopt to work?
     args.next();
     let cargo_wasm = CargoWasm::from_iter(args);
 
-    let log_level = if cargo_wasm.quiet() { "error" } else { "info" };
-    let env = Env::default().filter_or("MY_LOG_LEVEL", log_level);
-    env_logger::Builder::from_env(env)
+    let log_level = if cargo_wasm.quiet() {
+        LevelFilter::Error
+    } else {
+        LevelFilter::Info
+    };
+    env_logger::Builder::new()
         .format_level(true)
         .format_timestamp(None)
         .format_module_path(false)
+        .filter_level(log_level)
         .init();
 
     match std::env::var("CARGO") {
